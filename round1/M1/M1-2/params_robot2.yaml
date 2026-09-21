@@ -1,0 +1,16 @@
+# M1-2 参数文件示例（robot2：报警阈值 0.5m）
+# 与 params_robot1.yaml 唯一的区别就是阈值，
+# 用于验证"同一参数在不同命名空间下取不同值"。
+
+/**:
+  ros__parameters:
+    use_sim_time: false
+
+/**/node_b_filter:
+  ros__parameters:
+    alpha: 0.6            # 比 robot1 更灵敏
+
+/**/node_c_alarm:
+  ros__parameters:
+    alarm_threshold: 0.5  # 与 robot1 不同
+    service_timeout: 1.0

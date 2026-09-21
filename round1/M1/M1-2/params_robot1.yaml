@@ -1,0 +1,18 @@
+# M1-2 参数文件示例（robot1：报警阈值 0.3m）
+#
+# 注意：key 必须能匹配到"带命名空间"的节点名。
+# 用 /**/节点名 通配，这样同一份文件在任意命名空间下都能生效。
+# 【字段名是接口契约，请勿修改】
+
+/**:
+  ros__parameters:
+    use_sim_time: false
+
+/**/node_b_filter:
+  ros__parameters:
+    alpha: 0.3            # 一阶低通滤波系数
+
+/**/node_c_alarm:
+  ros__parameters:
+    alarm_threshold: 0.3  # 报警阈值（米）
+    service_timeout: 1.0  # 服务超时（秒）
