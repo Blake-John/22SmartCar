@@ -1,0 +1,13 @@
+# M0-2 示例配置：定义输入文件与参与计算的两列
+# 注意：现场考核会换成一份全新的 yaml + csv，字段含义保持不变
+
+input_csv: "sample_data.csv"
+
+columns:
+  x: "sensor_a"
+  y: "sensor_b"
+
+task:
+  name: "corr_analysis"
+  # 是否打印中间量（mean_x / mean_y / n）
+  verbose: true

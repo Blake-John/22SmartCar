@@ -1,0 +1,12 @@
+{
+  "timeout": 15,
+  "tasks": [
+    { "name": "Init",          "duration": 0.5, "success_rate": 1.0,  "dependencies": [] },
+    { "name": "Navigate",      "duration": 2.5, "success_rate": 0.8,  "dependencies": ["Init"] },
+    { "name": "DetectQR",      "duration": 1.5, "success_rate": 0.7,  "dependencies": ["Navigate"] },
+    { "name": "Grasp",         "duration": 1.0, "success_rate": 0.9,  "dependencies": ["DetectQR"] },
+    { "name": "AvoidObstacle", "duration": 2.0, "success_rate": 0.6,  "dependencies": ["Navigate"] },
+    { "name": "Place",         "duration": 1.0, "success_rate": 0.85, "dependencies": ["Grasp", "AvoidObstacle"] },
+    { "name": "ReturnHome",    "duration": 2.5, "success_rate": 0.95, "dependencies": ["Place"] }
+  ]
+}
