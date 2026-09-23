@@ -15,7 +15,7 @@
 
 具体考三件事：
 
-1. 你**分得清** `map` / `odom` / `base_link` / `laser_link` 各自代表什么
+1. 你**分得清** `map` / `odom` / `base_link` / `lidar_link` 各自代表什么
 2. 你会**量化**里程计漂移（不是"看起来还行"，而是均值 ± 标准差）
 3. 你知道**漂移从哪来**（轮子打滑？转弯累积？参数标定不准？）
 
@@ -149,7 +149,7 @@ t,x,y,theta
 
 | 变换 | 静态 / 动态 | 谁发布 | 物理含义 |
 | :-- | :-- | :-- | :-- |
-| `base_link → laser_link` | ? | ? | ? |
+| `base_link → lidar_link` | ? | ? | ? |
 | `base_link → camera_link` | ? | ? | ? |
 | `odom → base_link` | ? | ? | ? |
 | `map → odom` | ? | ? | ? |
