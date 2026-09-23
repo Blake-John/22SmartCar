@@ -1,6 +1,16 @@
 
 _grader/
 
+# ROS2 bag / 生成的数据（体积大，用 make_bag.py 现场生成）
+*.db3
+*.mcap
+sample_bag/
+round1/M1/M1-3/extrinsics.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+
 # Prerequisites
 *.d
 
