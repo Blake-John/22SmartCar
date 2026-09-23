@@ -74,7 +74,19 @@ ANGLE_MIN = -math.pi / 2
 ANGLE_MAX = math.pi / 2
 RANGE_MIN, RANGE_MAX = 0.10, 8.0
 
-RATE_HZ = 10.0
+# ── 两个传感器**独立**的时间线（这是本题"时间同步"的关键）──
+# 真机上激光雷达与相机是两套独立时钟，频率不同、相位不同、还有抖动。
+# 如果两者时间戳完全相同，精确同步(TimeSynchronizer)就够用，
+# ApproximateTimeSynchronizer 的考点就消失了。
+SCAN_HZ = 10.0            # 激光雷达 10Hz
+# 相机频率**刻意不用 30Hz**：30 是 10 的整数倍，两者相位会锁死，
+# 导致"雷达帧到最近相机帧"的间隔恒为半个相机周期(≈16.7ms)，
+# 学生把 slop 设成 17ms 就一劳永逸 —— slop 就失去了调优空间。
+# 取 27Hz（非整数倍）让相位每帧漂移，两路时间差在一个相机周期内连续变化，
+# slop 才有真实的调优空间（具体数值请自己扫一遍 slop 实测，不要照抄）。
+CAMERA_HZ = 27.0
+SCAN_JITTER_NS = 3_000_000      # 雷达时间戳抖动 ±3ms
+CAMERA_JITTER_NS = 2_000_000    # 相机时间戳抖动 ±2ms
 T0_NS = 0
 
 TOPIC_SCAN = "/scan"
@@ -94,6 +106,30 @@ def _dump_yaml(obj, path):
 
 def stamp(ns):
     return Time(sec=int(ns // 10**9), nanosec=int(ns % 10**9))
+
+
+def _timeline(hz, duration_s, rng, jitter_ns=0, phase_s=0.0):
+    """生成一个话题的**独立时间线**（纳秒，递增）。
+
+    模拟真实传感器：标称周期 + 相位偏移 + 随机抖动。
+        t_i = (phase + i / hz + jitter_i) * 1e9
+
+    jitter 用正态分布（std = jitter_ns/3，等效 ±jitter_ns 的 3σ 范围），
+    并做单调性修正 —— 时间戳必须严格递增，否则 message_filters 会错乱。
+    """
+    n = max(1, int(round(duration_s * hz)))
+    out = []
+    prev = -1
+    for i in range(n):
+        base = (phase_s + i / hz) * 1e9
+        if jitter_ns > 0:
+            base += rng.normal(0.0, jitter_ns / 3.0)
+        t = int(round(base))
+        if t <= prev:               # 保证严格递增（抖动可能造成回退）
+            t = prev + 1
+        out.append(t)
+        prev = t
+    return out
 
 
 def make_ranges(rng, k):
@@ -158,50 +194,69 @@ def build(outdir, frames, seed, laser_xyz, camera_xyz, camera_rpy,
         name=TOPIC_INFO, type="sensor_msgs/msg/CameraInfo",
         serialization_format="cdr"))
 
-    dt_ns = int(1e9 / RATE_HZ)
-    for k in range(frames):
-        t_ns = T0_NS + k * dt_ns
+    # ── 两个话题各自生成"时间线"（频率不同 + 独立抖动 + 相位错开）──
+    # 相位错开：相机不从 t=0 开始，而是偏移半个相机周期，
+    # 避免"第一个雷达帧恰好撞上第一个相机帧"这种巧合配对。
+    duration_s = float(frames) / SCAN_HZ        # 以雷达帧数定义总时长
+
+    scan_times = _timeline(SCAN_HZ, duration_s, rng,
+                           jitter_ns=SCAN_JITTER_NS, phase_s=0.0)
+    cam_times = _timeline(CAMERA_HZ, duration_s, rng,
+                          jitter_ns=CAMERA_JITTER_NS,
+                          phase_s=0.5 / CAMERA_HZ)
+
+    # 按时间顺序写入（rosbag 要求写入顺序递增，否则回放时序会乱）
+    events = ([(t, "scan") for t in scan_times] +
+              [(t, "camera") for t in cam_times])
+    events.sort(key=lambda e: e[0])
+
+    n_scan = n_cam = 0
+    for t_ns, kind in events:
         ts = stamp(t_ns)
+        if kind == "scan":
+            scan = LaserScan()
+            scan.header = Header()
+            scan.header.frame_id = FRAME_LASER
+            scan.header.stamp = ts
+            scan.angle_min = ANGLE_MIN
+            scan.angle_max = ANGLE_MAX
+            scan.angle_increment = (ANGLE_MAX - ANGLE_MIN) / (N_BEAMS - 1)
+            scan.time_increment = 0.0
+            scan.scan_time = 1.0 / SCAN_HZ
+            scan.range_min = RANGE_MIN
+            scan.range_max = RANGE_MAX
+            scan.ranges = make_ranges(rng, n_scan)
+            writer.write(TOPIC_SCAN, serialize_message(scan), t_ns)
+            n_scan += 1
+        else:
+            arr = make_image(rng, n_cam)
+            img = Image()
+            img.header = Header()
+            img.header.frame_id = FRAME_CAMERA
+            img.header.stamp = ts
+            img.height, img.width = IMG_H, IMG_W
+            img.encoding = "rgb8"
+            img.is_bigendian = 0
+            img.step = IMG_W * 3
+            img.data = arr.tobytes()
+            writer.write(TOPIC_IMAGE, serialize_message(img), t_ns)
 
-        scan = LaserScan()
-        scan.header = Header()
-        scan.header.frame_id = FRAME_LASER
-        scan.header.stamp = ts
-        scan.angle_min = ANGLE_MIN
-        scan.angle_max = ANGLE_MAX
-        scan.angle_increment = (ANGLE_MAX - ANGLE_MIN) / (N_BEAMS - 1)
-        scan.time_increment = 0.0
-        scan.scan_time = 1.0 / RATE_HZ
-        scan.range_min = RANGE_MIN
-        scan.range_max = RANGE_MAX
-        scan.ranges = make_ranges(rng, k)
-        writer.write(TOPIC_SCAN, serialize_message(scan), t_ns)
-
-        arr = make_image(rng, k)
-        img = Image()
-        img.header = Header()
-        img.header.frame_id = FRAME_CAMERA
-        img.header.stamp = ts
-        img.height, img.width = IMG_H, IMG_W
-        img.encoding = "rgb8"
-        img.is_bigendian = 0
-        img.step = IMG_W * 3
-        img.data = arr.tobytes()
-        writer.write(TOPIC_IMAGE, serialize_message(img), t_ns)
-
-        info = CameraInfo()
-        info.header = Header()
-        info.header.frame_id = FRAME_CAMERA
-        info.header.stamp = ts
-        info.height, info.width = IMG_H, IMG_W
-        info.distortion_model = "plumb_bob"
-        info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-        info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
-        info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-        writer.write(TOPIC_INFO, serialize_message(info), t_ns)
+            info = CameraInfo()
+            info.header = Header()
+            info.header.frame_id = FRAME_CAMERA
+            info.header.stamp = ts
+            info.height, info.width = IMG_H, IMG_W
+            info.distortion_model = "plumb_bob"
+            info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+            info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
+            info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+            writer.write(TOPIC_INFO, serialize_message(info), t_ns)
+            n_cam += 1
 
     writer.close()
+    stats = {"n_scan": n_scan, "n_cam": n_cam,
+             "scan_times": scan_times, "cam_times": cam_times}
 
     cfg = {
         "frames": {
@@ -230,16 +285,24 @@ def build(outdir, frames, seed, laser_xyz, camera_xyz, camera_rpy,
             "angle_min_deg": math.degrees(ANGLE_MIN),
             "angle_max_deg": math.degrees(ANGLE_MAX),
             "range_min": RANGE_MIN, "range_max": RANGE_MAX,
-            "rate_hz": RATE_HZ,
+            "rate_hz": SCAN_HZ,
+            "jitter_ms": SCAN_JITTER_NS / 1e6,
+        },
+        "camera": {
+            "width": IMG_W, "height": IMG_H, "encoding": "rgb8",
+            "rate_hz": CAMERA_HZ,
+            "jitter_ms": CAMERA_JITTER_NS / 1e6,
         },
     }
-    return cfg
+    return cfg, stats
 
 
 def main():
     ap = argparse.ArgumentParser(description="生成 M1-3 合成 rosbag + 外参文件")
     ap.add_argument("--out", default="sample_bag", help="输出目录")
-    ap.add_argument("--frames", type=int, default=20, help="帧数（默认 20）")
+    ap.add_argument("--frames", type=int, default=200,
+                    help="激光雷达帧数（默认 200 ≈ 20s，约 500MB）。"
+                         "帧数决定 bag 体积：约 2.5MB/帧")
     ap.add_argument("--seed", type=int, default=2025, help="随机种子")
     ap.add_argument("--extrinsics", default="extrinsics.yaml",
                     help="外参文件输出路径")
@@ -264,14 +327,22 @@ def main():
     camera_xyz = (args.camera_x, 0.0, args.camera_z)
     camera_rpy = (0.0, math.radians(args.camera_pitch_deg), 0.0)
 
-    cfg = build(args.out, args.frames, args.seed, laser_xyz, camera_xyz,
-                camera_rpy, args.fx, args.fy, args.cx, args.cy)
+    cfg, stats = build(args.out, args.frames, args.seed, laser_xyz,
+                       camera_xyz, camera_rpy, args.fx, args.fy,
+                       args.cx, args.cy)
     _dump_yaml(cfg, args.extrinsics)
 
     print("已生成 rosbag : %s" % args.out)
     print("已生成外参    : %s" % args.extrinsics)
-    print("  帧数      : %d  (%.1f Hz, 共 %.1f s)"
-          % (args.frames, RATE_HZ, args.frames / RATE_HZ))
+    dur = args.frames / SCAN_HZ
+    print("  时长      : %.1f s" % dur)
+    print("  激光帧数  : %d  (%.1f Hz, 抖动 ±%.1f ms)"
+          % (stats["n_scan"], SCAN_HZ, SCAN_JITTER_NS / 1e6))
+    print("  相机帧数  : %d  (%.1f Hz, 抖动 ±%.1f ms)"
+          % (stats["n_cam"], CAMERA_HZ, CAMERA_JITTER_NS / 1e6))
+    print()
+    print("  ★ 两个话题的时间戳**独立**（频率不同 + 抖动），")
+    print("    精确同步(TimeSynchronizer)配不上，必须用 ApproximateTimeSynchronizer。")
     print("  话题      : %s  %s  %s" % (TOPIC_SCAN, TOPIC_IMAGE, TOPIC_INFO))
     print("  激光      : %d 线, %.0f° ~ %.0f°, frame_id=%s"
           % (N_BEAMS, math.degrees(ANGLE_MIN), math.degrees(ANGLE_MAX),
