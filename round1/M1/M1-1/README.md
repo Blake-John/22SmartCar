@@ -101,11 +101,9 @@
 
 ---
 
----
-
-## 提示（不是答案）
+## 提示
 
 - 自己建 `sensor_interfaces` 包（`--build-type ament_cmake` + `rosidl_generate_interfaces`），`colcon build` 后用 `ros2 interface show` 确认字段
 - 参数必须 **`declare_parameter`** 才能被 `ros2 param set` 改
-- 服务超时的正统做法是 **`call_async` + 定时器轮询 `future.done()`**，
-  而不是在回调里阻塞等待（那会和 executor 重入打架）
+- 服务超时**不能靠在回调里阻塞等待**（那会和 executor 重入打架）——
+  想想异步调用配合什么机制才能既不阻塞、又能知道"超时了"

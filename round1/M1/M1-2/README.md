@@ -131,9 +131,7 @@ M1-1 里你开了三个终端，敲了三条 `ros2 run`。现在要比赛了—�
 
 ---
 
----
-
-## 提示（不是答案）
+## 提示
 
 - `GroupAction` + `PushRosNamespace` 可以整组加命名空间
 - 想让"节点C 在 B 之后启动"，用 `RegisterEventHandler(OnProcessStart(...))`
